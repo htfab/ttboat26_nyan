@@ -1,0 +1,111 @@
+`default_nettype none
+
+module music
+    (
+        input wire clk,
+        input wire rst_n,
+
+        output wire pwm
+    );
+
+    localparam INPUT_FREQUENCY = 25000000;                                      // 25MHz input clock
+    localparam SAMPLE_RATE = 200000;                                            // 200kHz PWM rate
+    localparam SAMPLE_BITS = $clog2(INPUT_FREQUENCY / SAMPLE_RATE);             // Number of bits needed for ideal sample size ($clog2(125) = 7 bits)
+    localparam SAMPLE_SIZE = 2**SAMPLE_BITS;                                    // Binary sample size (128)
+    localparam EXTRA_SAMPLE_BITS = 7;                                           // Additional precision in bits
+    localparam EXTENDED_SAMPLE_BITS = SAMPLE_BITS + EXTRA_SAMPLE_BITS;          // Total number of sample bits (14 bits)
+    localparam EXTENDED_SAMPLE_RANGE = SAMPLE_SIZE * (2 ** EXTRA_SAMPLE_BITS);  // Sample range which is also our internal resolution (16384)
+    localparam TICK_WIDTH = 28 * SAMPLE_RATE / 256 / 4;                         // The full Nyan Cat loop is approx. 28 seconds and contains 256 beats, which we divide in 4
+    localparam SHORT_SAMPLES = TICK_WIDTH * 3;                                  // Short note gets one beat minus a space
+    localparam LONG_SAMPLES = TICK_WIDTH * 7;                                   // Long note gets two beats minus a space
+    localparam SPACE_SAMPLES = TICK_WIDTH;                                      // Space between notes
+    localparam NOTE_BITS = $clog2(LONG_SAMPLES);
+
+    localparam G_SHARP = 4'd0;
+    localparam F_SHARP = 4'd1;
+    localparam E = 4'd2;
+    localparam D_SHARP = 4'd3;
+    localparam D = 4'd4;
+    localparam C_SHARP = 4'd5;
+    localparam B = 4'd6;
+    localparam LOW_A_SHARP = 4'd7;
+    localparam LOW_G_SHARP = 4'd8;
+    localparam LOW_F_SHARP = 4'd9;
+    localparam LOW_E = 4'd10;
+    localparam LOW_D_SHARP = 4'd11;
+
+    localparam SHORT_NOTE = 1'b0;
+    localparam LONG_NOTE = 1'b1;
+
+    reg [6:0] increments [11:0];
+    reg [4:0] melody [211:0];
+    reg [EXTENDED_SAMPLE_BITS - 1 : 0] extended_sample;
+    reg [7:0] melody_pos;
+    reg [SAMPLE_BITS - 1 : 0] pwm_pos;
+    reg [NOTE_BITS - 1 : 0] note_pos;
+    reg do_note;
+
+    wire [3:0] note;
+    wire note_length;
+    wire [SAMPLE_BITS - 1 : 0] sample;
+
+    assign note = melody[melody_pos][4:1];
+    assign note_length = melody[melody_pos][0];
+    assign sample = extended_sample[EXTENDED_SAMPLE_BITS - 1 -: SAMPLE_BITS];
+    assign pwm = (do_note && pwm_pos <= sample ? 1'b1 : 1'b0);
+
+    initial begin
+        increments[G_SHARP]         = 7'(EXTENDED_SAMPLE_RANGE * 415 / SAMPLE_RATE);
+        increments[F_SHARP]         = 7'(EXTENDED_SAMPLE_RANGE * 370 / SAMPLE_RATE);
+        increments[E]               = 7'(EXTENDED_SAMPLE_RANGE * 330 / SAMPLE_RATE);
+        increments[D_SHARP]         = 7'(EXTENDED_SAMPLE_RANGE * 311 / SAMPLE_RATE);
+        increments[D]               = 7'(EXTENDED_SAMPLE_RANGE * 294 / SAMPLE_RATE);
+        increments[C_SHARP]         = 7'(EXTENDED_SAMPLE_RANGE * 277 / SAMPLE_RATE);
+        increments[B]               = 7'(EXTENDED_SAMPLE_RANGE * 247 / SAMPLE_RATE);
+        increments[LOW_A_SHARP]     = 7'(EXTENDED_SAMPLE_RANGE * 233 / SAMPLE_RATE);
+        increments[LOW_G_SHARP]     = 7'(EXTENDED_SAMPLE_RANGE * 208 / SAMPLE_RATE);
+        increments[LOW_F_SHARP]     = 7'(EXTENDED_SAMPLE_RANGE * 185 / SAMPLE_RATE);
+        increments[LOW_E]           = 7'(EXTENDED_SAMPLE_RANGE * 165 / SAMPLE_RATE);
+        increments[LOW_D_SHARP]     = 7'(EXTENDED_SAMPLE_RANGE * 156 / SAMPLE_RATE);
+    end
+
+`include "melody.svh"
+
+    always @ (posedge clk) begin
+        if (!rst_n) begin
+            melody_pos <= 0;
+            pwm_pos <= 0;
+            do_note <= 1'b1;
+            note_pos <= 0;
+
+            extended_sample <= {EXTENDED_SAMPLE_BITS{1'b0}};
+        end else begin
+            if (pwm_pos == SAMPLE_SIZE - 1) begin
+                if (do_note && note_length == SHORT_NOTE && note_pos == NOTE_BITS'(SHORT_SAMPLES)) begin
+                    do_note <= 1'b0;
+                    note_pos <= 0;
+                end else if (do_note && note_length == LONG_NOTE && note_pos == NOTE_BITS'(LONG_SAMPLES)) begin
+                    do_note <= 1'b0;
+                    note_pos <= 0;
+                end else if (!do_note && note_pos == NOTE_BITS'(SPACE_SAMPLES)) begin
+                    do_note <= 1'b1;
+                    note_pos <= 0;
+
+                    if (melody_pos == 211) begin
+                        melody_pos <= 0;
+                    end else begin
+                        melody_pos <= melody_pos + 1;
+                    end
+                end else begin
+                    note_pos <= note_pos + 1;
+                end
+
+                if (do_note) begin
+                    extended_sample <= extended_sample + EXTENDED_SAMPLE_BITS'(increments[note]);
+                end
+            end
+
+            pwm_pos <= pwm_pos + 1;
+        end
+    end
+endmodule
